@@ -8,8 +8,8 @@ use sea_orm::{ActiveModelTrait, EntityTrait, Set};
 use sea_orm::{ConnectionTrait, DatabaseConnection, Schema, Statement};
 use tokio::sync::Mutex;
 
-use crate::entities::*;
 use crate::Result;
+use crate::entities::*;
 
 /// 连接路径
 pub(crate) fn join_paths<P: AsRef<Path>>(paths: Vec<P>) -> String {
@@ -94,7 +94,7 @@ fn init_dir() {
     std::fs::create_dir_all(cfg_local_dir()).unwrap();
 }
 
-/// 连接到Sqlite数据库
+/// 连接到 Sqlite 数据库
 pub(crate) async fn connect_db(path: &str) -> DatabaseConnection {
     let url = format!("sqlite:{}?mode=rwc", path);
     let mut opt = sea_orm::ConnectOptions::new(url);
@@ -183,25 +183,25 @@ pub(crate) async fn create_index(
     db.execute(stmt).await.unwrap();
 }
 
+/// 初始化数据库连接的异步函数
+async fn init_property_db() -> Mutex<DatabaseConnection> {
+    init_dir();
+    let db_path = join_paths(vec![cfg_local_dir().as_str(), "properties.db"]);
+    let db = connect_db(&db_path).await;
+    create_table_if_not_exists(&db, property::Entity).await;
+    property::init_indexes(&db).await;
+    Mutex::new(db)
+}
+
 lazy_static! {
     /// 静态初始化配置文件数据库
     pub(crate) static ref PROPERTY_DB: AsyncOnce<Mutex<DatabaseConnection>> =
-        AsyncOnce::new(async {
-            init_dir();
-            let db =
-                connect_db(join_paths(vec![cfg_local_dir().as_str(), "properties.db"]).as_str())
-                    .await;
-            create_table_if_not_exists(&db, property::Entity).await;
-            property::init_indexes(&db).await;
-            Mutex::<DatabaseConnection>::new(db)
-        });
+        AsyncOnce::new(init_property_db());
 }
 
 /// 从数据库读取配置文件
 pub(crate) async fn load_property_from_db(db: &DatabaseConnection, k: String) -> Result<String> {
-    let in_db = property::Entity::find_by_id(k.clone())
-        .one(db.deref())
-        .await?;
+    let in_db = property::Entity::find_by_id(k.clone()).one(db).await?;
     Ok(match in_db {
         Some(in_db) => in_db.v,
         None => String::default(),
@@ -219,15 +219,13 @@ pub(crate) async fn save_property_from_db(
     k: String,
     v: String,
 ) -> Result<()> {
-    let in_db = property::Entity::find_by_id(k.clone())
-        .one(db.deref())
-        .await?;
+    let in_db = property::Entity::find_by_id(k.clone()).one(db).await?;
     match in_db {
         Some(in_db) => {
             let mut data: property::ActiveModel = in_db.into();
             data.k = Set(k.clone());
             data.v = Set(v.clone());
-            data.update(db.deref()).await?;
+            data.update(db).await?;
         }
         None => {
             let insert = property::ActiveModel {
@@ -235,7 +233,7 @@ pub(crate) async fn save_property_from_db(
                 v: Set(v.clone()),
                 ..Default::default()
             };
-            insert.insert(db.deref()).await?;
+            insert.insert(db).await?;
         }
     };
     Ok(())
